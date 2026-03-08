@@ -10,20 +10,7 @@ dotenv.config();
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-```
 
-This means the app will read the key from an environment variable instead of having it written in the code — so it's never exposed publicly.
-
-**Step 3 — Update your .env file**
-Open **.env** and change it to:
-```
-GEMINI_API_KEY=AIzaSyAnKlsuTouKJ300HGTaqb8GYbNdir8_-18
-```
-
-**Step 4 — Create a .gitignore file**
-In the terminal type:
-```
-echo ".env" > .gitignore
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -60,6 +47,6 @@ app.post('/analyse', upload.single('food'), async (req, res) => {
   }
 });
 
-app.listen(3000, () => {
-  console.log('Calorie app running at http://localhost:3000');
+app.listen(process.env.PORT || 3000, () => {
+  console.log('Calorie app running');
 });

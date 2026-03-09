@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
 dotenv.config();
 
@@ -15,7 +15,7 @@ const upload = multer({ dest: 'uploads/' });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'leo123';
 
-const client = new MongoClient("mongodb+srv://leobenezra_db_user:9XvswDCsY6EsjXwd@leob.p3gceyh.mongodb.net/?appName=LeoB", {
+const client = new MongoClient("mongodb+srv://leobenezra_db_user:Leo12345app@leob.p3gceyh.mongodb.net/?appName=LeoB", {
   serverApi: { version: ServerApiVersion.v1 }
 });
 let logsCollection;
@@ -24,15 +24,27 @@ client.connect().then(() => {
   console.log('MongoDB connected');
   logsCollection = client.db('calorie-app').collection('logs');
   goalsCollection = client.db('calorie-app').collection('goals');
+}).catch(err => {
+  console.error('MongoDB connection failed:', err.message);
 });
 
 async function saveLog(entry) {
   try {
-    await logsCollection.insertOne(entry);
+    const r = await logsCollection.insertOne(entry);
     console.log('Log saved to MongoDB!');
+    return r.insertedId;
   } catch (e) {
     console.log('Log error:', e.message);
   }
+}
+
+function parseNum(val) {
+  if (!val) return 0;
+  return parseFloat(String(val).replace(/[^0-9.]/g, '')) || 0;
+}
+function getField(text, key) {
+  const match = text.match(new RegExp(key + ':\\s*([^|\\n]+)', 'i'));
+  return match ? match[1].trim() : '0';
 }
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
@@ -59,6 +71,18 @@ app.get('/history', async (req, res) => {
   res.json(logs);
 });
 
+app.delete('/log', async (req, res) => {
+  const { userId, id } = req.body;
+  if (!userId || !id) return res.status(400).json({ error: 'Missing userId or id' });
+  try {
+    const result = await logsCollection.deleteOne({ _id: new ObjectId(id), userId });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/today', async (req, res) => {
   const userId = req.query.userId;
   if (!userId) return res.status(400).json({ error: 'No userId' });
@@ -69,6 +93,46 @@ app.get('/today', async (req, res) => {
     timestamp: { $gte: startOfDay.toISOString() }
   }).toArray();
   res.json(logs);
+});
+
+app.get('/weekly', async (req, res) => {
+  const userId = req.query.userId;
+  if (!userId) return res.status(400).json({ error: 'No userId' });
+
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+
+  const logs = await logsCollection.find({
+    userId,
+    timestamp: { $gte: sevenDaysAgo.toISOString() }
+  }).toArray();
+
+  // Build 7 day slots
+  const days = {};
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    days[key] = { calories: 0, protein: 0, carbs: 0, fats: 0 };
+  }
+
+  logs.forEach(log => {
+    const day = log.timestamp.slice(0, 10);
+    if (!days[day]) return;
+    const t = log.result || '';
+    days[day].calories += parseNum(getField(t, 'Calories'));
+    days[day].protein  += parseNum(getField(t, 'Protein'));
+    days[day].carbs    += parseNum(getField(t, 'Carbs'));
+    days[day].fats     += parseNum(getField(t, 'Fats'));
+  });
+
+  const result = Object.entries(days).map(([date, data]) => {
+    const label = new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short' });
+    return { date, label, ...data };
+  });
+
+  res.json(result);
 });
 
 app.get('/goals', async (req, res) => {
@@ -95,7 +159,7 @@ app.post('/analyse', upload.single('food'), async (req, res) => {
     const imageData = fs.readFileSync(req.file.path, { encoding: 'base64' });
     const mimeType = req.file.mimetype;
     const userId = req.body.userId || 'anonymous';
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const result = await model.generateContent([
       { inlineData: { data: imageData, mimeType } },
       'Look at this food image. Identify the food and provide a full nutrition breakdown. Format your response EXACTLY as: Food: [name] | Calories: [number] kcal | Carbs: [number]g | Protein: [number]g | Fats: [number]g | Vegan: [yes/no] | Vegetarian: [yes/no] | Lactose Free: [yes/no] | Gluten Free: [yes/no] | Health Score: [number 1-10] | Notes: [brief info]'
